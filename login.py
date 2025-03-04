@@ -42,33 +42,61 @@ def daisy_login(su_username: str, su_password: str, staff: bool = False) -> str:
 
     # 1. Get the initial session cookie by visiting the main page
     session.get("https://daisy.dsv.su.se/index.jspa")
-
     # 2. Navigate to the login URL which may be needed to retrieve further login form details
     login_response = session.get(
-        "https://daisy.dsv.su.se/Shibboleth.sso/Login?entityID=https://idp.it.su.se/idp/shibboleth&target=https://daisy.dsv.su.se/login_sso_student.jspa" if not staff else "https://daisy.dsv.su.se/Shibboleth.sso/Login?entityID=https://idp.it.su.se/idp/shibboleth&target=https://daisy.dsv.su.se/login_sso_employee.jspa"
+        "https://daisy.dsv.su.se/Shibboleth.sso/Login?entityID=https://idp.it.su.se/idp/shibboleth&target=https://daisy.dsv.su.se/login_sso_student.jspa"
+        if not staff
+        else "https://daisy.dsv.su.se/Shibboleth.sso/Login?entityID=https://idp.it.su.se/idp/shibboleth&target=https://daisy.dsv.su.se/login_sso_employee.jspa"
     )
 
-    # Parse the form action URL and other necessary parameters from the login page
+    # find form
     soup = BeautifulSoup(login_response.text, "html.parser")
+    form = soup.find("form")
+    action_url = form["action"]
+
+    # Extract hidden input fields
+    form_data = {
+        tag["name"]: tag["value"]
+        for tag in form.find_all("input")
+        if tag.get("name") and tag.get("value")
+    }
+
+    # add eventId proceed as it doesn't have a value and won't be found by the previous for
+    form_data.update(
+        {
+            "_eventId_proceed": "",
+        }
+    )
+
+    # Submit the midstep form manually (this mimics JavaScript auto-submit)
+    intermediate_response = session.post(
+        "https://idp.it.su.se" + action_url, data=form_data
+    )
+
+    soup = BeautifulSoup(intermediate_response.text, "html.parser")
+
     # This depends heavily on the actual form structure and might need to be adjusted
     form = soup.find("form")
-    form_data = {tag["name"]: tag.get("value", "") for tag in form.find_all("input")} # type: ignore
+    form_data = {
+        tag["name"]: tag.get("value", "") for tag in form.find_all("input")
+    }  # type: ignore
 
     # Add username and password to the form data
     form_data.update(
-        {"j_username": su_username, "j_password": su_password, "_eventId_proceed": ""}
+        {
+            "j_username": su_username,
+            "j_password": su_password,
+            "_eventId_proceed": "",
+        }
     )
 
     form_data.pop("_eventId_authn/SPNEGO")
 
     # 3. Submit the login form
-    action_url = (
-        login_response.url.split(";")[0]
-        + "?"
-        + login_response.url.split(";")[1].split("?")[1]
+    action_url = form["action"]
+    post_response = session.post(
+        "https://idp.it.su.se" + action_url, data=form_data
     )
-
-    post_response = session.post(action_url, data=form_data)
 
     assert post_response.ok
 
@@ -81,13 +109,25 @@ def daisy_login(su_username: str, su_password: str, staff: bool = False) -> str:
         tag.get("name"): tag.get("value")
         for tag in form.find_all("input")
         if tag.get("name") and tag.get("value")
-    } # type: ignore
+    }  # type: ignore
 
     # Submit the form
-    action_url = form["action"] # type: ignore
-    post_response = session.post(action_url, data=form_data, headers={"Content-Type": "application/x-www-form-urlencoded", "Origin": "https://idp.it.su.se", "Referer": "https://idp.it.su.se/"}) # type: ignore
+    action_url = form["action"]  # type: ignore
+    post_response = session.post(
+        action_url,
+        data=form_data,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Origin": "https://idp.it.su.se",
+            "Referer": "https://idp.it.su.se/",
+        },
+    )  # type: ignore
 
-    j_session_id = [cookie_str for cookie_str in post_response.request.headers["Cookie"].split(";") if "JSESSIONID" in cookie_str][0].split("=")[1]
+    j_session_id = [
+        cookie_str
+        for cookie_str in post_response.request.headers["Cookie"].split(";")
+        if "JSESSIONID" in cookie_str
+    ][0].split("=")[1]
 
     return j_session_id
 
